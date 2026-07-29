@@ -16,7 +16,7 @@ import { NextResponse } from "next/server";
 // in a ListModels call does not guarantee generateContent still serves it). Using
 // gemini-2.5-flash instead: a current, stable (non-preview/experimental), fully
 // multimodal model confirmed available on this project's API key.
-const GEMINI_MODEL = "gemini-2.5-flash";
+const GEMINI_MODEL = "gemini-flash-latest";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 export async function POST(request: Request) {
