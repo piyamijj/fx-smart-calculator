@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { GoogleGenerativeAI } from "@google/generative-ai";
+import { GoogleGenAI } from "@google/genai";
 
 export async function POST(request: Request) {
   try {
@@ -22,9 +22,8 @@ export async function POST(request: Request) {
       );
     }
 
-    // Initialize Gemini SDK
-    const genAI = new GoogleGenerativeAI(apiKey);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.0-flash" });
+    const ai = new GoogleGenAI({ apiKey });
+    const modelName = "gemini-2.0-flash";
 
     const systemPrompt = `Sen gelişmiş bir matematik öğretmenisin. Sana verilen matematik problemini (metin ve/veya görsel olarak) adım adım, anlaşılır ve detaylı bir şekilde çözmelisin.
 Lütfen şu kurallara kesinlikle uy:
@@ -34,13 +33,11 @@ Lütfen şu kurallara kesinlikle uy:
 4. Karmaşık LaTeX formülleri kullanma. Bunun yerine düz metin veya basit matematiksel semboller kullan (örn. x^2, sqrt(x), pi, * vb.).
 5. Önemli terimleri veya adımları vurgulamak için hafif markdown kalın yazı stilini (**kalın**) kullanabilirsin.`;
 
-    const contents: any[] = [];
+    const parts: any[] = [];
 
     if (imageBase64) {
-      // Parse base64 image data
-      // Format: "data:image/png;base64,iVBORw0KGgo..."
       const matches = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
-      
+
       if (!matches || matches.length < 3) {
         return NextResponse.json(
           { error: "Geçersiz görsel formatı." },
@@ -51,24 +48,30 @@ Lütfen şu kurallara kesinlikle uy:
       const mimeType = matches[1];
       const base64Data = matches[2];
 
-      contents.push({
-        text: `${systemPrompt}\n\nKullanıcı Sorusu: ${question || "Lütfen ekteki görseldeki matematik problemini çözün."}`
+      parts.push({
+        text: `$${systemPrompt}\n\nKullanıcı Sorusu: $${question || "Lütfen ekteki görseldeki matematik problemini çözün."}`,
       });
 
-      contents.push({
+      parts.push({
         inlineData: {
           mimeType,
-          data: base64Data
-        }
+          data: base64Data,
+        },
       });
     } else {
-      contents.push({
-        text: `${systemPrompt}\n\nKullanıcı Sorusu: ${question}`
+      parts.push({
+        text: `$${systemPrompt}\n\nKullanıcı Sorusu: $${question}`,
       });
     }
 
-    const result = await model.generateContent(contents);
-    const responseText = result.response.text();
+    const contents = [{ role: "user", parts }];
+
+    const response = await ai.models.generateContent({
+      model: modelName,
+      contents,
+    });
+
+    const responseText = response.text;
 
     if (!responseText) {
       throw new Error("Empty response from Gemini API");
@@ -76,10 +79,28 @@ Lütfen şu kurallara kesinlikle uy:
 
     return NextResponse.json({ solution: responseText });
   } catch (error: any) {
-    console.error("Gemini API Route Error:", error);
-    return NextResponse.json(
-      { error: "Yapay zeka çözümü alınırken bir hata oluştu. Lütfen daha sonra tekrar deneyin." },
-      { status: 500 }
-    );
+    console.error("Gemini API Route Error:", {
+      message: error?.message,
+      status: error?.status,
+      responseData: error?.response?.data,
+      raw: error,
+    });
+
+    const rawMsg: string = (error?.message || "").toString();
+    let clientMessage =
+      "Yapay zeka çözümü alınırken bir hata oluştu. Lütfen daha sonra tekrar deneyin.";
+
+    if (/api key|permission_denied|unauthorized|401|403/i.test(rawMsg)) {
+      clientMessage =
+        "API anahtarı geçersiz veya yetkisiz görünüyor. Lütfen GEMINI_API_KEY değerini kontrol edin.";
+    } else if (/quota|resource_exhausted|429/i.test(rawMsg)) {
+      clientMessage =
+        "Yapay zeka kullanım kotanız dolmuş görünüyor. Lütfen daha sonra tekrar deneyin.";
+    } else if (/not found|404/i.test(rawMsg)) {
+      clientMessage =
+        "Seçilen yapay zeka modeline şu anda ulaşılamıyor. Lütfen daha sonra tekrar deneyin.";
+    }
+
+    return NextResponse.json({ error: clientMessage }, { status: 500 });
   }
 }
