@@ -1,5 +1,21 @@
 import { NextResponse } from "next/server";
 
+// NOTE: this route calls the Gemini REST API directly via fetch() instead of using
+// any Node SDK (@google/generative-ai and @google/genai were both tried and dropped).
+// Both SDKs pull in google-auth-library/gaxios — a heavy transitive dependency chain
+// meant for GCP service-account/OAuth flows — which used modern private-class-field
+// syntax that broke this project's Next.js 14 build (first at the Babel/SWC stage,
+// then again at the Terser minification stage). A simple API-key-based call needs
+// none of that, so calling the REST endpoint directly avoids the whole dependency
+// chain and its build issues entirely. This is Google's officially supported way to
+// call Gemini with just an API key (no service-account/OAuth setup needed).
+
+// NOTE: gemini-2.0-flash / gemini-2.0-flash-001 were officially retired (shut down)
+// by Google on 2026-06-01 and now return a 404 from the API — that was the actual
+// root cause of the runtime 500 seen on the live deployment (the model showing up
+// in a ListModels call does not guarantee generateContent still serves it). Using
+// gemini-2.5-flash instead: a current, stable (non-preview/experimental), fully
+// multimodal model confirmed available on this project's API key.
 const GEMINI_MODEL = "gemini-2.5-flash";
 const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
@@ -35,6 +51,8 @@ Lütfen şu kurallara kesinlikle uy:
     const parts: any[] = [];
 
     if (imageBase64) {
+      // Parse base64 image data
+      // Format: "data:image/png;base64,iVBORw0KGgo..."
       const matches = imageBase64.match(/^data:([a-zA-Z0-9]+\/[a-zA-Z0-9-.+]+);base64,(.+)$/);
 
       if (!matches || matches.length < 3) {
@@ -48,7 +66,7 @@ Lütfen şu kurallara kesinlikle uy:
       const base64Data = matches[2];
 
       parts.push({
-        text: `$${systemPrompt}\n\nKullanıcı Sorusu: $${question || "Lütfen ekteki görseldeki matematik problemini çözün."}`,
+        text: `${systemPrompt}\n\nKullanıcı Sorusu: ${question || "Lütfen ekteki görseldeki matematik problemini çözün."}`,
       });
 
       parts.push({
@@ -59,7 +77,7 @@ Lütfen şu kurallara kesinlikle uy:
       });
     } else {
       parts.push({
-        text: `$${systemPrompt}\n\nKullanıcı Sorusu: $${question}`,
+        text: `${systemPrompt}\n\nKullanıcı Sorusu: ${question}`,
       });
     }
 
@@ -67,7 +85,7 @@ Lütfen şu kurallara kesinlikle uy:
       contents: [{ parts }],
     };
 
-    const geminiResponse = await fetch(`$${GEMINI_ENDPOINT}?key=$${apiKey}`, {
+    const geminiResponse = await fetch(`${GEMINI_ENDPOINT}?key=${apiKey}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(requestBody),
@@ -76,6 +94,7 @@ Lütfen şu kurallara kesinlikle uy:
     const geminiData = await geminiResponse.json();
 
     if (!geminiResponse.ok) {
+      // Google's standard error shape: { error: { code, message, status } }
       const apiError = geminiData?.error;
       console.error("Gemini REST API Error:", {
         httpStatus: geminiResponse.status,
@@ -114,6 +133,8 @@ Lütfen şu kurallara kesinlikle uy:
 
     return NextResponse.json({ solution: responseText });
   } catch (error: any) {
+    // Log the full error server-side only — never sent to the client — so this is
+    // diagnosable from Vercel's function logs if it happens again.
     console.error("Solve Route Error:", {
       message: error?.message,
       raw: error,
