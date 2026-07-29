@@ -1,5 +1,7 @@
 import { NextResponse } from "next/server";
-import { GoogleGenAI } from "@google/genai";
+
+const GEMINI_MODEL = "gemini-2.0-flash";
+const GEMINI_ENDPOINT = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 export async function POST(request: Request) {
   try {
@@ -21,9 +23,6 @@ export async function POST(request: Request) {
         { status: 500 }
       );
     }
-
-    const ai = new GoogleGenAI({ apiKey });
-    const modelName = "gemini-2.0-flash";
 
     const systemPrompt = `Sen gelişmiş bir matematik öğretmenisin. Sana verilen matematik problemini (metin ve/veya görsel olarak) adım adım, anlaşılır ve detaylı bir şekilde çözmelisin.
 Lütfen şu kurallara kesinlikle uy:
@@ -64,43 +63,65 @@ Lütfen şu kurallara kesinlikle uy:
       });
     }
 
-    const contents = [{ role: "user", parts }];
+    const requestBody = {
+      contents: [{ parts }],
+    };
 
-    const response = await ai.models.generateContent({
-      model: modelName,
-      contents,
+    const geminiResponse = await fetch(`$${GEMINI_ENDPOINT}?key=$${apiKey}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(requestBody),
     });
 
-    const responseText = response.text;
+    const geminiData = await geminiResponse.json();
+
+    if (!geminiResponse.ok) {
+      const apiError = geminiData?.error;
+      console.error("Gemini REST API Error:", {
+        httpStatus: geminiResponse.status,
+        code: apiError?.code,
+        status: apiError?.status,
+        message: apiError?.message,
+      });
+
+      let clientMessage =
+        "Yapay zeka çözümü alınırken bir hata oluştu. Lütfen daha sonra tekrar deneyin.";
+
+      const apiStatus: string = (apiError?.status || "").toString();
+      const apiMsg: string = (apiError?.message || "").toString();
+
+      if (/PERMISSION_DENIED|UNAUTHENTICATED/i.test(apiStatus) || /api key/i.test(apiMsg)) {
+        clientMessage =
+          "API anahtarı geçersiz veya yetkisiz görünüyor. Lütfen GEMINI_API_KEY değerini kontrol edin.";
+      } else if (/RESOURCE_EXHAUSTED/i.test(apiStatus) || geminiResponse.status === 429) {
+        clientMessage =
+          "Yapay zeka kullanım kotanız dolmuş görünüyor. Lütfen daha sonra tekrar deneyin.";
+      } else if (/NOT_FOUND/i.test(apiStatus) || geminiResponse.status === 404) {
+        clientMessage =
+          "Seçilen yapay zeka modeline şu anda ulaşılamıyor. Lütfen daha sonra tekrar deneyin.";
+      }
+
+      return NextResponse.json({ error: clientMessage }, { status: 500 });
+    }
+
+    const responseText: string | undefined =
+      geminiData?.candidates?.[0]?.content?.parts?.[0]?.text;
 
     if (!responseText) {
+      console.error("Gemini REST API returned no text. Full response:", geminiData);
       throw new Error("Empty response from Gemini API");
     }
 
     return NextResponse.json({ solution: responseText });
   } catch (error: any) {
-    console.error("Gemini API Route Error:", {
+    console.error("Solve Route Error:", {
       message: error?.message,
-      status: error?.status,
-      responseData: error?.response?.data,
       raw: error,
     });
 
-    const rawMsg: string = (error?.message || "").toString();
-    let clientMessage =
-      "Yapay zeka çözümü alınırken bir hata oluştu. Lütfen daha sonra tekrar deneyin.";
-
-    if (/api key|permission_denied|unauthorized|401|403/i.test(rawMsg)) {
-      clientMessage =
-        "API anahtarı geçersiz veya yetkisiz görünüyor. Lütfen GEMINI_API_KEY değerini kontrol edin.";
-    } else if (/quota|resource_exhausted|429/i.test(rawMsg)) {
-      clientMessage =
-        "Yapay zeka kullanım kotanız dolmuş görünüyor. Lütfen daha sonra tekrar deneyin.";
-    } else if (/not found|404/i.test(rawMsg)) {
-      clientMessage =
-        "Seçilen yapay zeka modeline şu anda ulaşılamıyor. Lütfen daha sonra tekrar deneyin.";
-    }
-
-    return NextResponse.json({ error: clientMessage }, { status: 500 });
+    return NextResponse.json(
+      { error: "Yapay zeka çözümü alınırken bir hata oluştu. Lütfen daha sonra tekrar deneyin." },
+      { status: 500 }
+    );
   }
 }
